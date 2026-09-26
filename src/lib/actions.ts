@@ -11,7 +11,7 @@ import {
 import { revalidatePath } from 'next/cache';
 
 // Helper to calculate day of week from YYYY-MM-DD (1 = Mon, 5 = Fri, fallback to Mon)
-export function getDayOfWeekFromDateStr(dateStr: string): number {
+export async function getDayOfWeekFromDateStr(dateStr: string): Promise<number> {
   const d = new Date(dateStr + 'T00:00:00');
   const day = d.getDay(); // 0 = Sun, 1 = Mon, ...
   if (day >= 1 && day <= 5) return day;
@@ -73,7 +73,7 @@ export async function updateSystemSettings(
 // 3. Get Dashboard Stats
 export async function getDashboardStats(dateStr: string): Promise<DashboardStats> {
   try {
-    const dayOfWeek = getDayOfWeekFromDateStr(dateStr);
+    const dayOfWeek = await getDayOfWeekFromDateStr(dateStr);
 
     const totalTeachers = await prisma.teacher.count();
 
@@ -189,7 +189,7 @@ export async function removeAbsence(absenceId: string) {
 // 8. Get Uncovered Classes for a selected date
 export async function getUncoveredClasses(dateStr: string): Promise<UncoveredClass[]> {
   try {
-    const dayOfWeek = getDayOfWeekFromDateStr(dateStr);
+    const dayOfWeek = await getDayOfWeekFromDateStr(dateStr);
 
     // Get absent teachers today
     const absences = await prisma.absence.findMany({
@@ -249,7 +249,6 @@ export async function getUncoveredClasses(dateStr: string): Promise<UncoveredCla
 }
 
 // 9. ADVANCED BACKEND MATCHING ALGORITHM
-// Evaluates all non-absent teachers against Rules 1-4 for a target period/date
 export async function getAvailableTeachersForClass(
   dateStr: string,
   periodNumber: number,
@@ -284,12 +283,11 @@ export async function getAvailableTeachersForClass(
     const evaluations: TeacherEvaluation[] = [];
 
     for (const teacher of allTeachers) {
-      // Don't evaluate the absent teacher for their own class relief
       if (teacher.id === targetAbsentTeacherId) continue;
 
       const exclusionReasons: string[] = [];
 
-      // --- RULE 1: Teacher is NOT in the Absence table for today ---
+      // RULE 1: Teacher is NOT in the Absence table for today
       const isAbsent = absentTeacherIdSet.has(teacher.id);
       if (isAbsent) {
         exclusionReasons.push('Marked absent today');
@@ -299,8 +297,7 @@ export async function getAvailableTeachersForClass(
       const teacherSlots = allTimetableSlots.filter((s) => s.teacherId === teacher.id);
       const slotForTargetPeriod = teacherSlots.find((s) => s.periodNumber === periodNumber);
 
-      // --- RULE 2: Teacher's TimetableSlot for this period is marked isFreePeriod = true ---
-      // Also check if already assigned to another relief class in this target period
+      // RULE 2: Teacher's TimetableSlot for this period is marked isFreePeriod = true
       const existingReliefForTargetPeriod = todayReliefAssignments.find(
         (r) => r.coveringTeacherId === teacher.id && r.periodNumber === periodNumber
       );
@@ -315,10 +312,7 @@ export async function getAvailableTeachersForClass(
         );
       }
 
-      // Calculate total scheduled regular teaching periods for today (where isFreePeriod = false)
       const scheduledRegularPeriodsCount = teacherSlots.filter((s) => !s.isFreePeriod).length;
-
-      // Calculate total existing relief assignments for today
       const teacherReliefAssignmentsToday = todayReliefAssignments.filter(
         (r) => r.coveringTeacherId === teacher.id
       );
@@ -326,34 +320,29 @@ export async function getAvailableTeachersForClass(
 
       const totalPeriodsToday = scheduledRegularPeriodsCount + reliefAssignmentsCount;
 
-      // --- RULE 3 (Workload Limit): totalPeriodsToday + 1 <= maxTotalPeriodsPerDay ---
+      // RULE 3: totalPeriodsToday + 1 <= maxTotalPeriodsPerDay
       if (totalPeriodsToday + 1 > maxTotalPeriodsPerDay) {
         exclusionReasons.push(
           `Exceeds maximum daily workload limit (${totalPeriodsToday}/${maxTotalPeriodsPerDay} periods occupied)`
         );
       }
 
-      // --- RULE 4 (Consecutive Limit): Adding this period will NOT result in exceeding maxConsecutivePeriods ---
-      // Construct an array of 8 boolean flags representing occupied periods 1 to 8
-      const isPeriodOccupied: boolean[] = Array(9).fill(false); // 1-indexed
+      // RULE 4: Consecutive Limit
+      const isPeriodOccupied: boolean[] = Array(9).fill(false);
 
-      // Mark regular teaching periods
       for (const slot of teacherSlots) {
         if (!slot.isFreePeriod) {
           isPeriodOccupied[slot.periodNumber] = true;
         }
       }
 
-      // Mark existing relief assignment periods
       for (const r of teacherReliefAssignmentsToday) {
         isPeriodOccupied[r.periodNumber] = true;
       }
 
-      // Test adding the candidate target period
       const testPeriodOccupied = [...isPeriodOccupied];
       testPeriodOccupied[periodNumber] = true;
 
-      // Calculate current max consecutive periods
       let currentMaxConsecutive = 0;
       let tempCount = 0;
       for (let p = 1; p <= 8; p++) {
@@ -365,7 +354,6 @@ export async function getAvailableTeachersForClass(
         }
       }
 
-      // Calculate candidate max consecutive periods if assigned
       let candidateMaxConsecutive = 0;
       let candidateTempCount = 0;
       for (let p = 1; p <= 8; p++) {
@@ -384,8 +372,6 @@ export async function getAvailableTeachersForClass(
       }
 
       const isAvailable = exclusionReasons.length === 0;
-
-      // Soft Warning: If teacher is exactly 1 period away from daily limit (e.g. 6/7)
       const isNearLimitWarning = isAvailable && totalPeriodsToday + 1 === maxTotalPeriodsPerDay;
 
       evaluations.push({
@@ -403,7 +389,6 @@ export async function getAvailableTeachersForClass(
       });
     }
 
-    // Sort: Available teachers first, then near-limit warnings second, then by total workload (lowest first)
     evaluations.sort((a, b) => {
       if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
       if (a.totalPeriodsToday !== b.totalPeriodsToday) return a.totalPeriodsToday - b.totalPeriodsToday;
@@ -427,7 +412,6 @@ export async function assignReliefTeacher(
   venue: string
 ) {
   try {
-    // Check if already assigned
     const existing = await prisma.reliefAssignment.findFirst({
       where: {
         absentTeacherId,
@@ -437,7 +421,6 @@ export async function assignReliefTeacher(
     });
 
     if (existing) {
-      // Update existing assignment
       const updated = await prisma.reliefAssignment.update({
         where: { id: existing.id },
         data: {
