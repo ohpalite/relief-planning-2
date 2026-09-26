@@ -1,0 +1,65 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Teacher {
+  id                  String             @id @default(cuid())
+  name                String
+  department          String
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  timetableSlots      TimetableSlot[]
+  absences            Absence[]
+  reliefCovered       ReliefAssignment[] @relation("CoveringTeacher")
+  reliefAbsent        ReliefAssignment[] @relation("AbsentTeacher")
+}
+
+model TimetableSlot {
+  id           String   @id @default(cuid())
+  teacherId    String
+  teacher      Teacher  @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  dayOfWeek    Int      // 1: Mon, 2: Tue, 3: Wed, 4: Thu, 5: Fri
+  periodNumber Int      // 1 to 8
+  subject      String
+  venue        String
+  isFreePeriod Boolean  @default(false)
+
+  @@index([teacherId, dayOfWeek])
+}
+
+model Absence {
+  id        String   @id @default(cuid())
+  teacherId String
+  teacher   Teacher  @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  date      String   // ISO format YYYY-MM-DD
+
+  @@unique([teacherId, date])
+  @@index([date])
+}
+
+model ReliefAssignment {
+  id                String   @id @default(cuid())
+  absentTeacherId   String
+  absentTeacher     Teacher  @relation("AbsentTeacher", fields: [absentTeacherId], references: [id], onDelete: Cascade)
+  coveringTeacherId String
+  coveringTeacher   Teacher  @relation("CoveringTeacher", fields: [coveringTeacherId], references: [id], onDelete: Cascade)
+  date              String   // ISO format YYYY-MM-DD
+  periodNumber      Int
+  subject           String
+  venue             String
+  createdAt         DateTime @default(now())
+
+  @@index([date, periodNumber])
+  @@index([coveringTeacherId, date])
+}
+
+model SystemSettings {
+  id                    String @id @default("default")
+  maxConsecutivePeriods Int    @default(6)
+  maxTotalPeriodsPerDay Int    @default(7)
+}
