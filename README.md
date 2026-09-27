@@ -1,4 +1,4 @@
-# 🏫 School Relief Planning System (Evergreen Primary School)
+# 🏫 School Relief Planning System
 
 A modern, full-stack Web Application for substitute teacher scheduling and relief allocation. Built with **Next.js (App Router)**, **TypeScript**, **Tailwind CSS**, **Prisma ORM**, and **Neon Serverless Postgres**.
 
